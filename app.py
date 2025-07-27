@@ -1,92 +1,126 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
-import numpy_financial as npf
-
-# -----------------------------
-# Assume all your precomputed data is loaded here
-# -----------------------------
-
 import joblib
+import requests
+import numpy as np
 
-adjusted_df = joblib.load("data/adjusted_df.pkl")
-price_data = joblib.load("data/price_data.pkl")
-holdings_pivot = joblib.load("data/holdings_pivot.pkl")
-daily_portfolio_value = joblib.load("data/daily_stocks_value.pkl")
-xirr_results = joblib.load("data/xirr_results.pkl")
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+NEWSAPI_KEY = os.getenv("NEWSAPI_KEY")
 
 
 st.set_page_config(page_title="Stock Portfolio Dashboard", layout="wide")
-st.title("📈 Stock Portfolio Analysis Dashboard")
 
-# -----------------------------
-# Section 1: Portfolio Summary
-# -----------------------------
-st.header("Portfolio Summary")
-st.markdown("This dashboard visualizes trades, prices, portfolio value over time, and XIRR for each holding.")
+@st.cache_resource
+def load_data():
+    adjusted_df = joblib.load("data/adjusted_df.pkl")
+    price_data = joblib.load("data/price_data.pkl")
+    holdings_pivot = joblib.load("data/holdings_pivot.pkl")
+    daily_value = joblib.load("data/daily_stocks_value.pkl")
+    xirr_results = joblib.load("data/xirr_results.pkl")
+    return adjusted_df, price_data, holdings_pivot, daily_value, xirr_results
 
-col1, col2 = st.columns(2)
-with col1:
-    total_current_value = daily_portfolio_value['Total Value'].iloc[-1]
-    st.metric("💰 Current Portfolio Value", f"${total_current_value:,.2f}")
-with col2:
-    total_holdings = holdings_pivot.iloc[-1].astype(bool).sum()
-    st.metric("📦 Active Holdings", f"{total_holdings}")
+adjusted_df, price_data, holdings_pivot, daily_value, xirr_results = load_data()
 
-# -----------------------------
-# Section 2: Holdings Overview
-# -----------------------------
-st.subheader("📊 Holdings Snapshot")
-st.dataframe(holdings_pivot.iloc[-1].to_frame(name='Quantity').sort_values(by='Quantity', ascending=False))
+section = st.sidebar.radio("Navigate to:", [
+    "Portfolio Overview",
+    "XIRR Analysis",
+    "Daily Portfolio Value",
+    "Individual Stock Charts",
+    "Upload New Data",
+    "Latest News"
+])
 
-# -----------------------------
-# Section 3: Portfolio Value Over Time
-# -----------------------------
-st.subheader("📉 Portfolio Value Over Time")
-fig1, ax1 = plt.subplots(figsize=(12, 4))
-daily_portfolio_value['Total Value'].plot(ax=ax1, color='green')
-ax1.set_title("Daily Total Portfolio Value")
-ax1.set_ylabel("Value in USD")
-ax1.grid(True, linestyle='--', alpha=0.3)
-st.pyplot(fig1)
+if section == "Portfolio Overview":
+    st.title("\U0001F4C8 Portfolio Overview")
+    st.dataframe(adjusted_df.head())
 
-# -----------------------------
-# Section 4: XIRR by Symbol
-# -----------------------------
-st.subheader("📈 XIRR by Stock Holding")
+    st.subheader("Trade Volume by Symbol")
+    volume = adjusted_df.groupby("Symbol")["Quantity"].sum().sort_values(ascending=False)
+    st.bar_chart(volume)
 
-# Filter valid results
-valid_xirr = {
-    sym: val for sym, val in xirr_results.items()
-    if isinstance(val, (float, int)) and not np.isnan(val)
-}
+elif section == "XIRR Analysis":
+    st.title("\U0001F4CA XIRR by Stock")
 
-if valid_xirr:
-    xirr_df = pd.DataFrame(list(valid_xirr.items()), columns=['Symbol', 'XIRR'])
-    xirr_df = xirr_df.sort_values('XIRR', ascending=False)
-    st.dataframe(xirr_df.style.format({'XIRR': "{:.2%}"}))
+    xirr_cleaned = {
+        symbol: round(float(xirr) * 100, 2)
+        for symbol, xirr in xirr_results.items()
+        if isinstance(xirr, (float, int)) and not np.isnan(xirr)
+    }
 
-    # Plot
-    fig2, ax2 = plt.subplots(figsize=(12, 5))
-    colors = ['teal' if x >= 0 else 'crimson' for x in xirr_df['XIRR']]
-    ax2.bar(xirr_df['Symbol'], xirr_df['XIRR'], color=colors)
-    ax2.set_title("Annualized Return (XIRR) per Holding")
-    ax2.axhline(0, linestyle='--', color='gray')
-    ax2.set_ylabel("XIRR (%)")
-    for idx, val in enumerate(xirr_df['XIRR']):
-        ax2.text(idx, val, f"{val:.1%}", ha='center', va='bottom', fontsize=8)
-    st.pyplot(fig2)
-else:
-    st.info("No valid XIRR results to display.")
+    xirr_df = pd.DataFrame({
+        "Symbol": list(xirr_cleaned.keys()),
+        "XIRR (%)": list(xirr_cleaned.values())
+    })
 
-# -----------------------------
-# (Optional) Section 5: Upload New File
-# -----------------------------
-st.subheader("📁 Upload New Trade File")
-uploaded_file = st.file_uploader("Upload your trade Excel/CSV file to re-run the analysis", type=["csv", "xlsx"])
-if uploaded_file:
-    st.warning("You can now process this file in your backend pipeline.")
+    st.dataframe(xirr_df.sort_values("XIRR (%)", ascending=False))
 
-st.markdown("---")
-st.caption("Made with ❤️ using Streamlit")
+    st.subheader("XIRR Comparison")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.bar(xirr_df["Symbol"], xirr_df["XIRR (%)"], color="teal")
+    ax.set_ylabel("XIRR (%)")
+    ax.set_title("Annualized Return (XIRR) by Holding")
+    ax.axhline(0, color='gray', linestyle='--')
+    st.pyplot(fig)
+
+    # Optional: XIRR for selected stock
+    selected = st.selectbox("Select a stock to view XIRR", xirr_df["Symbol"])
+    value = xirr_df.set_index("Symbol").loc[selected, "XIRR (%)"]
+    st.metric(f"XIRR for {selected}", f"{value:.2f}%")
+
+elif section == "Daily Portfolio Value":
+    st.title("\U0001F4C5 Daily Portfolio Value")
+    st.line_chart(daily_value)
+
+elif section == "Individual Stock Charts":
+    st.title("\U0001F4C9 Individual Stock Activity")
+    stock = st.selectbox("Choose a stock", sorted(adjusted_df["Symbol"].unique()))
+
+    if stock:
+        subset = adjusted_df[adjusted_df["Symbol"] == stock]
+        monthly_trades = subset.resample("ME", on="Date/Time")["Quantity"].sum()
+        monthly_proceeds = subset.resample("ME", on="Date/Time")["Proceeds"].sum()
+
+        st.subheader("Quantity Traded")
+        st.bar_chart(monthly_trades)
+
+        st.subheader("Proceeds")
+        st.bar_chart(monthly_proceeds)
+
+elif section == "Upload New Data":
+    st.title("\U0001F4C2 Upload CSV Files")
+    uploaded_files = st.file_uploader("Upload CSV files", type="csv", accept_multiple_files=True)
+
+    if uploaded_files:
+        for file in uploaded_files:
+            df = pd.read_csv(file)
+            st.success(f"Uploaded: {file.name} - {df.shape[0]} rows")
+            st.dataframe(df.head())
+
+elif section == "Latest News":
+    st.title("\U0001F4F0 Latest Stock Market News")
+
+    def fetch_stock_news():
+        url = "https://newsapi.org/v2/everything"
+        params = {
+            "q": "stocks OR investing OR equities",
+            "language": "en",
+            "sortBy": "publishedAt",
+            "apiKey": NEWSAPI_KEY
+        }
+        response = requests.get(url, params=params)
+        data = response.json()
+        return data.get("articles", [])[:5]
+
+    try:
+        articles = fetch_stock_news()
+        for article in articles:
+            st.subheader(article['title'])
+            st.write(article['description'])
+            st.markdown(f"[Read more]({article['url']})")
+            st.markdown("---")
+    except:
+        st.warning("Could not fetch news. Check your API key or internet connection.")
