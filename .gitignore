@@ -1,0 +1,16 @@
+# Ignore Python venv and system files
+.venv/
+__pycache__/
+*.pyc
+
+# Ignore Streamlit & IPython cache
+.streamlit/
+.ipynb_checkpoints/
+
+# Ignore local data artifacts
+data/
+*.pkl
+
+# Ignore VSCode/IDE config
+.vscode/
+*.log
